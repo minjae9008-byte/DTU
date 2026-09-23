@@ -38,7 +38,7 @@ SCALER = [("자동 (GPU: EWA Lanczos Sharp / CPU: Lanczos)", "auto"), ("Lanczos-
 GPU = [("자동 (하드웨어 GPU가 있을 때만)", "auto"), ("항상 사용", "on"), ("사용 안 함 (CPU만)", "off")]
 DEINT = [("자동 감지 - 추천", "auto"), ("끄기", "off"), ("BWDIF (같은 프레임 수)", "bwdif"),
          ("BWDIF 2배 프레임 (부드러운 움직임)", "bwdif_double"), ("역텔레시네 IVTC (NTSC 필름 → 23.976p)", "ivtc"),
-         ("필드 매칭 (PAL 필름)", "fieldmatch")]
+         ("필드 매칭 (PAL 필름)", "fieldmatch"), ("중복 프레임 제거 (29.97p → 23.976p)", "decimate")]
 CROP = [("자동 검은 여백 제거", "auto"), ("사용 안 함", "off")]
 DENOISE = [("끄기", "off"), ("약 - 추천", "light"), ("중", "medium"), ("강", "strong"),
            ("최강 (오래된 필름, 느림)", "very_strong")]

@@ -231,7 +231,7 @@ def make_parser() -> argparse.ArgumentParser:
         q.add_argument("--upscale", help="off|720p|1080p|1440p|2160p|WxH")
         q.add_argument("--scaler", help="auto|lanczos|spline36|spline64|bicubic|ewa_lanczossharp|...")
         q.add_argument("--gpu", choices=["auto", "on", "off"], help="GPU(libplacebo) 업스케일")
-        q.add_argument("--deinterlace", choices=["auto", "off", "bwdif", "bwdif_double", "ivtc", "fieldmatch"])
+        q.add_argument("--deinterlace", choices=["auto", "off", "bwdif", "bwdif_double", "ivtc", "fieldmatch", "decimate"])
         q.add_argument("--crop", choices=["auto", "off"])
         q.add_argument("--deblock", choices=["off", "light", "medium", "strong"])
         q.add_argument("--denoise", choices=["off", "light", "medium", "strong", "very_strong"])

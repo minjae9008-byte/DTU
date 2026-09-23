@@ -97,7 +97,8 @@ def resolve_deinterlace(vs: VideoSettings, scan: Optional[ScanAnalysis]) -> str:
         return mode
     if scan is None:
         return "off"
-    return {"progressive": "off", "soft_telecine": "soft_telecine", "telecine": "ivtc", "mixed": "ivtc",
+    return {"progressive": "off", "soft_telecine": "soft_telecine", "dup_frames": "decimate",
+            "telecine": "ivtc", "mixed": "ivtc",
             "field_shift": "fieldmatch", "interlaced": "bwdif_double"}.get(scan.scan, "off")
 
 
@@ -109,6 +110,8 @@ def deinterlace_filters(mode: str, v: VideoStream, parity: str) -> Tuple[List[st
         return [], fps
     if mode == "soft_telecine":
         return ["fps=24000/1001"], Fraction(24000, 1001)
+    if mode == "decimate":
+        return ["decimate"], fps * Fraction(4, 5)
     if mode == "bwdif":
         return [f"bwdif=mode=send_frame:parity={par}:deint=all"], fps
     if mode == "bwdif_double":
@@ -171,7 +174,8 @@ def build_video_plan(info: MediaInfo, vs: VideoSettings, es: EncodeSettings,
     plan.deinterlace_mode = mode
     names = {"off": "", "soft_telecine": "소프트 텔레시네 → 23.976p", "bwdif": "BWDIF 디인터레이스",
              "bwdif_double": "BWDIF 디인터레이스 (2배 프레임, 부드러운 움직임)",
-             "fieldmatch": "필드 매칭", "ivtc": "역텔레시네 (fieldmatch + decimate → 23.976p)"}
+             "fieldmatch": "필드 매칭", "ivtc": "역텔레시네 (fieldmatch + decimate → 23.976p)",
+             "decimate": "중복 프레임 제거 (decimate → 23.976p)"}
     if names.get(mode):
         plan.notes.append(names[mode])
 

@@ -34,7 +34,7 @@ _CROP = re.compile(r"crop=(-?\d+):(-?\d+):(-?\d+):(-?\d+)")
 
 @dataclass
 class ScanAnalysis:
-    scan: str = "progressive"  # progressive | soft_telecine | telecine | field_shift | interlaced | mixed
+    scan: str = "progressive"  # progressive | soft_telecine | dup_frames | telecine | field_shift | interlaced | mixed
     field_order: str = "tff"
     interlaced_ratio: float = 0.0
     repeated_ratio: float = 0.0
@@ -45,6 +45,7 @@ class ScanAnalysis:
     def describe(self) -> str:
         names = {
             "progressive": "프로그레시브 (디인터레이스 불필요)",
+            "dup_frames": "중복 프레임 29.97p 필름 (중복 제거 → 23.976p)",
             "soft_telecine": "소프트 텔레시네 필름 (23.976p로 복원)",
             "telecine": "하드 텔레시네 필름 (역텔레시네 IVTC 적용)",
             "field_shift": "필드 어긋난 필름 (필드 매칭 적용)",
@@ -110,6 +111,35 @@ def _last(regex, text) -> Optional[Tuple[int, ...]]:
     return tuple(int(v) for v in m[-1])
 
 
+def _has_dup_cadence(ff: FFmpeg, info: MediaInfo, times: List[float], vindex: int) -> bool:
+    """True if one frame in every five is a repeat of the previous one."""
+    import numpy as np
+    w, h = 160, 120
+    votes = 0
+    tested = 0
+    for t in times:
+        args = [ff.ffmpeg, "-hide_banner", "-nostdin", "-v", "error"]
+        if t > 0:
+            args += ["-ss", f"{t:.3f}"]
+        args += [*info.spec.args(), "-map", f"0:{vindex}", "-frames:v", "150",
+                 "-vf", f"scale={w}:{h},format=gray", "-f", "rawvideo", "-"]
+        p = run(args, timeout=300)
+        n = len(p.stdout) // (w * h)
+        if n < 30:
+            continue
+        f = np.frombuffer(p.stdout[:n * w * h], np.uint8).reshape(n, h, w).astype(np.float32)
+        d = np.abs(np.diff(f, axis=0)).mean(axis=(1, 2))
+        med = [np.median(d[k::5]) for k in range(5)]
+        k = int(np.argmin(med))
+        others = np.median(np.concatenate([d[j::5] for j in range(5) if j != k]))
+        if others < 0.8:  # static scene: no information
+            continue
+        tested += 1
+        if med[k] < 0.2 * others:
+            votes += 1
+    return tested > 0 and votes * 2 > tested
+
+
 def analyze_scan(ff: FFmpeg, info: MediaInfo, samples: int = 4, frames: int = 300,
                  progress: Optional[Callable[[str], None]] = None) -> ScanAnalysis:
     v = info.main_video
@@ -139,19 +169,30 @@ def analyze_scan(ff: FFmpeg, info: MediaInfo, samples: int = 4, frames: int = 30
 
     # soft pulldown: repeat_pict flags on decoded frames
     if ntsc and v.codec in ("mpeg2video", "mpeg1video"):
-        try:
-            t0 = times[len(times) // 2]
-            p = run([ff.ffprobe, "-v", "error", "-select_streams", f"{v.index}", "-read_intervals",
-                     f"{t0:.3f}%+#{frames}", "-show_entries", "frame=repeat_pict", "-of", "csv=p=0",
-                     *info.spec.args()], timeout=300)
-            vals = [l.strip() for l in p.stdout.decode("utf-8", "replace").splitlines() if l.strip()]
+        t0 = times[len(times) // 2]
+        intervals = ([f"{t0:.3f}%+#{frames}"] if t0 > 0 else []) + [f"%+#{frames}"]
+        for interval in intervals:  # some MPEG-PS files refuse to seek: fall back to the start
+            try:
+                p = run([ff.ffprobe, "-v", "error", "-select_streams", f"{v.index}", "-read_intervals", interval,
+                         "-show_entries", "frame=repeat_pict", "-of", "csv=p=0", *info.spec.args()], timeout=300)
+            except Exception:  # noqa: BLE001 - optional refinement only
+                continue
+            vals = []
+            for line in p.stdout.decode("utf-8", "replace").splitlines():
+                first = line.split(",")[0].strip()
+                if first.isdigit():
+                    vals.append(int(first))
             if vals:
-                res.soft_pulldown_ratio = sum(1 for x in vals if x not in ("0", "")) / len(vals)
-        except Exception:  # noqa: BLE001 - optional refinement only
-            pass
+                res.soft_pulldown_ratio = sum(1 for x in vals if x > 0) / len(vals)
+                break
 
     if res.interlaced_ratio < 0.10:
-        res.scan = "soft_telecine" if res.soft_pulldown_ratio > 0.2 else "progressive"
+        if res.soft_pulldown_ratio > 0.2:
+            res.scan = "soft_telecine"
+        elif ntsc and abs(float(v.fps) - 29.97) < 0.05 and _has_dup_cadence(ff, info, times, v.index):
+            res.scan = "dup_frames"  # 24p film padded to 29.97p by repeating every 5th frame
+        else:
+            res.scan = "progressive"
         return res
 
     # stage 2: does field matching produce progressive frames?

@@ -173,7 +173,10 @@ class MediaInfo:
         if v:
             dar = v.dar
             dar_s = "16:9" if abs(float(dar) - 16 / 9) < 0.03 else ("4:3" if abs(float(dar) - 4 / 3) < 0.03 else f"{float(dar):.2f}:1")
-            lines.append(f"영상: {v.codec} {v.width}x{v.height} (화면비 {dar_s}), {float(v.fps):.3f} fps, "
+            fps = v.fps
+            if v.avg_fps and abs(float(v.fps) - 2 * float(v.avg_fps)) < 0.1:
+                fps = v.avg_fps  # MPEG-2 with repeat-field flags reports the field rate
+            lines.append(f"영상: {v.codec} {v.width}x{v.height} (화면비 {dar_s}), {float(fps):.3f} fps, "
                          f"필드: {v.field_order}")
         for a in self.audio:
             lines.append("오디오: " + a.label())

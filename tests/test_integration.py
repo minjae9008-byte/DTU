@@ -118,10 +118,39 @@ def test_scan_detection_on_synthetic_telecine_and_interlace(tmp_path):
            "-c:v", "mpeg2video", "-b:v", "8M", "-flags", "+ilme+ildct", "-r", "30000/1001", "-f", "vob", inter)
     prog = str(tmp_path / "prog.mpg")
     ffmpeg("-f", "lavfi", "-i", src, "-c:v", "mpeg2video", "-b:v", "8M", "-f", "vob", prog)
+    dup = str(tmp_path / "dup.mpg")  # 24p padded to 29.97p by repeating frames (cheap DVD authoring)
+    ffmpeg("-f", "lavfi", "-i", src, "-vf", "fps=30000/1001", "-c:v", "mpeg2video", "-b:v", "8M", "-f", "vob", dup)
     res = {}
-    for name, path in (("tele", tele), ("inter", inter), ("prog", prog)):
+    for name, path in (("tele", tele), ("inter", inter), ("prog", prog), ("dup", dup)):
         res[name] = analyze_scan(FF, probe_media(FF, resolve_input(path))).scan
-    assert res == {"tele": "telecine", "inter": "interlaced", "prog": "progressive"}
+    assert res == {"tele": "telecine", "inter": "interlaced", "prog": "progressive", "dup": "dup_frames"}
+
+
+def test_soft_telecine_detected_and_restored(tmp_path):
+    """Progressive 24p pictures with repeat-field flags (the usual NTSC film DVD)."""
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
+    from soft_pulldown import apply_pulldown
+    from dtu.analyze import analyze_scan
+    from dtu.inputs import resolve_input
+    from dtu.job import Job
+    from dtu.probe import probe_media
+    m2v = tmp_path / "in.m2v"
+    ffmpeg("-f", "lavfi", "-i", "testsrc2=s=720x480:r=24000/1001:d=3", "-c:v", "mpeg2video", "-bf", "0",
+           "-b:v", "6M", str(m2v))
+    data = bytearray(m2v.read_bytes())
+    assert apply_pulldown(data) == 72
+    soft = tmp_path / "soft.m2v"
+    soft.write_bytes(bytes(data))
+    vob = str(tmp_path / "soft.vob")
+    ffmpeg("-i", str(soft), "-c", "copy", "-f", "vob", vob)
+    info = probe_media(FF, resolve_input(vob))
+    assert analyze_scan(FF, info).scan == "soft_telecine"
+    out = str(tmp_path / "soft.mkv")
+    s = fast_settings()
+    s.subtitles.mode = "none"
+    Job(vob, s, output=out, ff=FF).run()
+    st = FF.probe(["-i", out], ["-count_frames", "-show_streams", "-select_streams", "v:0"])["streams"][0]
+    assert st["r_frame_rate"] == "24000/1001" and int(st["nb_read_frames"]) == 72
 
 
 def test_crop_detection(tmp_path):
