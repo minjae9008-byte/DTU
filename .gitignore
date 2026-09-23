@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+*.sup
+*_DTU.mkv
+*_DTU.mp4
+ffmpeg/
