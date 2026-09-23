@@ -718,8 +718,12 @@ class App:
     def _analyze_worker(self, item: JobItem):
         from .job import Job
         try:
+            for _ in range(50):  # FFmpeg detection runs right after start-up
+                if self.ff is not None:
+                    break
+                time.sleep(0.1)
             if self.ff is None:
-                raise FFmpegNotFound("FFmpeg 없음")
+                raise FFmpegNotFound("FFmpeg를 찾을 수 없습니다 ('기타' 탭에서 폴더 지정)")
             s = self.collect_settings_threadsafe()
             job = Job(item.path, s, ff=self.ff)
             plan = job.analyze()

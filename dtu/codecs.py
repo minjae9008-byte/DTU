@@ -27,7 +27,7 @@ class CodecDef:
 
 CODECS: Dict[str, CodecDef] = {c.key: c for c in [
     CodecDef("av1", "AV1 (SVT-AV1) - 최신·최고 압축, 추천", "libsvtav1", "av1", False, 27, (10, 50), "CRF",
-             note="측정: 같은 화질(VMAF≈98.5)에서 H.264보다 약 40%, HEVC보다 약 13% 작은 파일"),
+             note="측정: 같은 화질에서 H.264보다 약 35%, HEVC보다 약 9% 작은 파일"),
     CodecDef("hevc", "HEVC/H.265 (x265) - 호환성 좋음", "libx265", "hevc", False, 20, (12, 32), "CRF"),
     CodecDef("h264", "H.264 (x264) - 최대 호환성", "libx264", "h264", False, 18, (12, 30), "CRF",
              ten_bit=False, note="구형 TV/기기 재생용 (8비트)"),
@@ -52,6 +52,10 @@ _NVENC_PRESET = {"fastest": "p3", "fast": "p5", "balanced": "p6", "slow": "p7", 
 _QSV_PRESET = {"fastest": "veryfast", "fast": "faster", "balanced": "medium", "slow": "slow", "slowest": "veryslow"}
 _AMF_QUALITY = {"fastest": "speed", "fast": "balanced", "balanced": "quality", "slow": "quality",
                 "slowest": "quality"}
+# Poc0IDR: the first picture is an IDR.  By default VVenC codes leading
+# pictures before the first IDR, so the stream appears to start 0.3-0.6 s
+# late (FFmpeg drops the frames before it) and short clips can come out empty.
+_VVENC_OPTIONS = ("-vvenc-params", "Poc0IDR=1")
 
 
 def output_pix_fmt(cd: CodecDef, bit_depth: int) -> str:
@@ -99,9 +103,7 @@ def encoder_args(es: EncodeSettings, fps: Optional[Fraction] = None) -> List[str
         else:
             a += ["-g", str(gop)]
     elif enc == "libvvenc":
-        # intra period 5 s (VVenC emits no frames for clips shorter than a
-        # longer period in current FFmpeg builds)
-        a += ["-preset", _VVENC_PRESET[speed], "-qp", str(q), "-period", "5"]
+        a += ["-preset", _VVENC_PRESET[speed], "-qp", str(q), "-period", "10", *_VVENC_OPTIONS]
     elif enc.endswith("_nvenc"):
         a += ["-preset", _NVENC_PRESET[speed], "-tune", "hq", "-rc", "vbr", "-cq", str(q), "-b:v", "0",
               "-spatial-aq", "1", "-temporal-aq", "1", "-rc-lookahead", "32", "-g", str(gop)]
@@ -134,13 +136,16 @@ def encoder_args(es: EncodeSettings, fps: Optional[Fraction] = None) -> List[str
     return a
 
 
+def codec_usable(ff, key: str) -> bool:
+    """True if this FFmpeg can encode ``key`` the way DTU configures it."""
+    cd = CODECS[key]
+    if cd.hardware:  # listed hardware encoders often lack a device or driver
+        return ff.encoder_works(cd.encoder, "nv12")
+    if cd.encoder == "libvvenc":  # older VVenC builds reject Poc0IDR
+        return ff.encoder_works(cd.encoder, "yuv420p10le", _VVENC_OPTIONS)
+    return ff.has_encoder(cd.encoder)
+
+
 def available_codecs(ff) -> List[str]:
-    """Codec keys whose encoder is present (hardware ones are test-encoded)."""
-    out = []
-    for key, cd in CODECS.items():
-        if not ff.has_encoder(cd.encoder):
-            continue
-        if cd.hardware and not ff.encoder_works(cd.encoder, "nv12" if not cd.encoder.endswith("videotoolbox") else "nv12"):
-            continue
-        out.append(key)
-    return out
+    """Codec keys this FFmpeg can use (hardware encoders and VVenC are test-encoded)."""
+    return [key for key in CODECS if codec_usable(ff, key)]

@@ -200,7 +200,7 @@ VMAF는 선명화를 과하게 좋아하는 경향이 있습니다. 원본과의
 
 시공간(3D) 필터인 hqdn3d가 PSNR과 SSIM을 가장 잘 개선하면서도 가장 빨랐습니다. 느린 NLMeans와 BM3D는 어떤 지표도 개선하지 못했습니다. 그래서 기본은 "약"이고, 필름 입자가 심한 영상에만 강하게 씁니다.
 
-**블록 제거**는 일반 DVD 비트레이트에서 시험한 모든 필터가 원본과의 차이를 오히려 키웠습니다. deblock은 −0.3~−0.5 VMAF, 실제 양자화 테이블을 쓴 spp/pp7/fspp는 −3~−15였습니다. 그래서 기본은 **끔**이고, 깍두기 현상이 눈에 띄는 디스크에만 가장 부드러운 `deblock`을 씁니다.
+**블록 제거**는 일반 DVD 비트레이트에서 시험한 모든 필터가 원본과의 차이를 오히려 키웠습니다. `deblock`은 VMAF가 0.3~0.5 낮아졌고, 더 강한 spp·pp7은 설정에 따라 0.9~11.7 낮아졌습니다. 그래서 기본은 **끔**이고, 깍두기 현상이 눈에 띄는 디스크에만 가장 부드러운 `deblock`을 씁니다.
 
 **디밴딩**은 수치로는 잡히지 않지만, 대비를 6배로 키워 보면 하늘 그라데이션의 MPEG-2 계단이 뚜렷하게 사라지고 경계선은 그대로 유지됩니다. 그래서 기본으로 "약"을 켭니다.
 
@@ -215,9 +215,19 @@ VMAF는 선명화를 과하게 좋아하는 경향이 있습니다. 원본과의
 
 그래서 **자동** 모드는 자막마다 안티에일리어싱 픽셀이 있는지 검사합니다. 있으면 윤곽 복원을, 없으면 xBR을 씁니다.
 
-### 코덱 (위 체인으로 만든 무손실 1080p 기준, 기본 품질·"균형" 속도)
+### 코덱 (위 체인으로 만든 무손실 1080p 기준, "균형" 속도, 클립 3개 평균)
 
-BENCH_CODECS_TABLE
+| 코덱 · 품질 | 비트레이트 | VMAF | 인코딩 시간 |
+|---|---|---|---|
+| **AV1 CRF 27 (기본)** | **8.1 Mbps** | 98.48 | 27초 |
+| AV1 CRF 24 | 9.5 Mbps | 99.04 | 25초 |
+| AV1 CRF 30 | 7.1 Mbps | 97.93 | 25초 |
+| AV1 CRF 33 | 5.9 Mbps | 97.26 | 25초 |
+| HEVC CRF 20 (기본) | 9.3 Mbps | 98.61 | 45초 |
+| H.264 CRF 18 (기본) | 13.9 Mbps | 98.87 | 25초 |
+| VVC QP 30 | 1.7 Mbps | 91.21 | 256초 |
+
+같은 VMAF로 맞춰 비교하면 AV1 파일은 H.264보다 약 35%, HEVC보다 약 9% 작습니다. 인코딩도 HEVC보다 빨라서 기본 코덱은 AV1입니다. VVC는 AV1보다 10배쯤 느립니다.
 
 ## 이미지 자막 업스케일
 
@@ -292,7 +302,7 @@ python ../tools/benchmark/bench_upscale.py cpu      # 업스케일
 python ../tools/benchmark/bench_filters.py denoise  # 잡음 제거 / sharpen / deblock / speed
 python ../tools/benchmark/bench_deinterlace.py deint  # 디인터레이스 (ivtc: 역텔레시네)
 python ../tools/benchmark/bench_interp.py           # 프레임 보간
-python ../tools/benchmark/bench_codecs.py           # 코덱 효율
+python ../tools/benchmark/bench_codecs.py av1 hevc h264 vvc av1:30   # 코덱 효율 ("코덱:품질"로 품질 지정)
 python ../tools/benchmark/bench_subtitles.py .      # 자막 업스케일 (Pillow + 한글 글꼴 필요)
 ```
 

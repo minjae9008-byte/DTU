@@ -74,8 +74,9 @@ class AudioTrackPlan:
             if abs(self.gain_db) > 0.05:
                 f.append(f"volume={self.gain_db:+.2f}dB")
         if self.action == "encode":
-            # look-ahead limiter at -1 dBFS keeps peaks legal after gain changes
-            f.append("alimiter=limit=0.891:attack=5:release=50:level=0:latency=1")
+            if self.filters or (self.normalize and self.measured_lufs is not None):
+                # look-ahead limiter at -1 dBFS keeps peaks legal after gain changes
+                f.append("alimiter=limit=0.891:attack=5:release=50:level=0:latency=1")
             if self.codec == "opus":
                 f.append("aresample=48000")
                 if self.out_layout == "5.1(side)":

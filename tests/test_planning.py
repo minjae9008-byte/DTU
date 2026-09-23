@@ -7,7 +7,7 @@ import pytest
 
 from dtu.analyze import CropAnalysis, ScanAnalysis
 from dtu.audio import build_enhance_filters, default_bitrate, plan_audio
-from dtu.codecs import CODECS, encoder_args
+from dtu.codecs import CODECS, available_codecs, encoder_args
 from dtu.inputs import InputSpec, parse_vts_ifo, resolve_input, vob_set
 from dtu.probe import AudioStream, MediaInfo, SubtitleStream, VideoStream, _media_duration
 from dtu.settings import AudioSettings, EncodeSettings, PRESETS, Settings, VideoSettings, preset_settings
@@ -96,6 +96,17 @@ def test_encoder_args_are_well_formed(key):
 def test_h264_is_8bit_vvc_is_10bit():
     assert encoder_args(EncodeSettings(codec="h264"))[-1] == "yuv420p"
     assert encoder_args(EncodeSettings(codec="vvc", bit_depth=8))[-1] == "yuv420p10le"
+
+
+def test_available_codecs_hides_encoders_that_fail_a_test_encode():
+    class FakeFF:
+        def has_encoder(self, name):
+            return name in ("libsvtav1", "libvvenc", "hevc_nvenc")
+
+        def encoder_works(self, name, pix_fmt="yuv420p", options=()):
+            return False  # e.g. no NVIDIA GPU, VVenC too old for Poc0IDR
+
+    assert available_codecs(FakeFF()) == ["av1"]
 
 
 def test_audio_downmix_dialog_and_opus_layout():

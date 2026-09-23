@@ -153,6 +153,21 @@ def test_soft_telecine_detected_and_restored(tmp_path):
     assert st["r_frame_rate"] == "24000/1001" and int(st["nb_read_frames"]) == 72
 
 
+@pytest.mark.skipif(FF is None or not FF.has_encoder("libvvenc"), reason="libvvenc not available")
+def test_vvc_stream_starts_with_first_frame(tmp_path):
+    """VVenC must not put leading pictures before the first IDR: the stream
+    would appear to start late and FFmpeg drops the frames before that."""
+    from fractions import Fraction
+    from dtu.codecs import encoder_args
+    from dtu.settings import EncodeSettings
+    out = str(tmp_path / "vvc.mkv")
+    ffmpeg("-f", "lavfi", "-i", "testsrc2=s=320x240:r=24000/1001:d=2",
+           *encoder_args(EncodeSettings(codec="vvc", speed="fastest"), Fraction(24000, 1001)), out)
+    data = FF.probe(["-i", out], ["-count_frames", "-show_streams", "-show_format"])
+    assert float(data["format"]["start_time"]) == 0.0
+    assert int(data["streams"][0]["nb_read_frames"]) == 48
+
+
 def test_crop_detection(tmp_path):
     from dtu.analyze import analyze_crop
     from dtu.inputs import resolve_input

@@ -67,6 +67,34 @@ def read_packets(ff: FFmpeg, input_args: Sequence[str], stream_index: int,
     return out, extradata, sjson
 
 
+def read_packets_multi(ff: FFmpeg, input_args: Sequence[str], stream_indices: Sequence[int],
+                       timeout: Optional[float] = 3600):
+    """Read several subtitle streams in ONE pass over the file.
+
+    Returns {index: (packets, extradata, stream_json)}.  A DVD movie often
+    carries 4-8 subtitle languages; reading them together avoids demuxing a
+    multi-gigabyte VOB set once per track.
+    """
+    wanted = set(stream_indices)
+    st = ff.probe(input_args, ["-show_streams", "-show_data", "-select_streams", "s"])
+    streams = {s_["index"]: s_ for s_ in st.get("streams") or [] if s_.get("index") in wanted}
+    args = [ff.ffprobe, "-hide_banner", "-v", "error", "-of", "json", "-show_packets", "-show_data",
+            "-select_streams", "s", *input_args]
+    p = run(args, timeout=timeout)
+    if p.returncode != 0:
+        raise FFmpegError("ffprobe failed reading subtitle packets", p.stderr.decode("utf-8", "replace"))
+    out = {i: ([], hexdump_to_bytes(streams[i].get("extradata", "")) if streams.get(i, {}).get("extradata")
+               else b"", streams.get(i, {})) for i in wanted}
+    for q in json.loads(p.stdout.decode("utf-8", "replace") or "{}").get("packets", []):
+        i = q.get("stream_index")
+        if i not in wanted or q.get("pts_time") in (None, "N/A"):
+            continue
+        dur = q.get("duration_time")
+        out[i][0].append((float(q["pts_time"]), float(dur) if dur not in (None, "N/A") else None,
+                          hexdump_to_bytes(q.get("data", ""))))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # DVD
 # ---------------------------------------------------------------------------
@@ -171,9 +199,13 @@ def pgs_pictures(packets: List[Tuple[float, Optional[float], bytes]], time_offse
 
 
 def load_track(ff: FFmpeg, input_args: Sequence[str], stream_index: int, time_offset: float = 0.0,
-               ifo_palette=None, canvas: Optional[Tuple[int, int]] = None) -> SubTrack:
-    """Load a bitmap subtitle stream from an FFmpeg input."""
-    packets, extradata, sj = read_packets(ff, input_args, stream_index)
+               ifo_palette=None, canvas: Optional[Tuple[int, int]] = None, preread=None) -> SubTrack:
+    """Load a bitmap subtitle stream from an FFmpeg input.
+
+    ``preread`` may hold ``(packets, extradata, stream_json)`` from
+    :func:`read_packets_multi`.
+    """
+    packets, extradata, sj = preread if preread is not None else read_packets(ff, input_args, stream_index)
     codec = sj.get("codec_name", "")
     tags = sj.get("tags") or {}
     disp = sj.get("disposition") or {}

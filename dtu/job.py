@@ -14,13 +14,13 @@ from typing import Callable, List, Optional, Tuple
 from . import __version__
 from .analyze import CropAnalysis, ScanAnalysis, analyze_crop, analyze_scan
 from .audio import AudioTrackPlan, measure_loudness, plan_audio
-from .codecs import CODECS, encoder_args, software_pix_fmt
+from .codecs import CODECS, codec_usable, encoder_args, software_pix_fmt
 from .ffmpeg import FFmpeg, FFmpegError, args_to_display, popen
 from .inputs import InputSpec, resolve_input
 from .probe import LANG_NAMES_KO, MediaInfo, SubtitleStream, lang3, probe_media
 from .settings import Settings
 from .subtitles.pipeline import Geometry, convert_track
-from .subtitles.source import load_track
+from .subtitles.source import load_track, read_packets_multi
 from .video import VideoPlan, build_video_plan, deinterlace_filters, resolve_deinterlace
 
 ProgressCB = Callable[[str, float, str], None]  # (stage, fraction 0..1, detail)
@@ -226,6 +226,12 @@ class Job:
         ifo_pal = info.ifo.palette if info.ifo else None
         cache = {}
         todo = [sp for sp in plan.subs if sp.action in ("pgs", "burn")]
+        embedded = sorted({sp.stream.index for sp in todo if not sp.stream.external})
+        preread = {}
+        if len(embedded) > 1:  # one demux pass for all embedded subtitle tracks
+            if progress:
+                progress("subtitles", 0.0, f"자막 {len(embedded)}개 트랙 읽는 중")
+            preread = read_packets_multi(self.ff, info.spec.args(), embedded)
         for n, sp in enumerate(todo):
             self._check()
             st = sp.stream
@@ -238,7 +244,8 @@ class Job:
                 else:
                     track = load_track(self.ff, info.spec.args(), st.index, time_offset=info.start_time,
                                        ifo_palette=ifo_pal,
-                                       canvas=(info.main_video.width, info.main_video.height))
+                                       canvas=(info.main_video.width, info.main_video.height),
+                                       preread=preread.get(st.index))
                 cache[key] = track
             track = cache[key]
             has_forced = any(p.forced for p in track.pictures)
@@ -374,6 +381,10 @@ class Job:
     # -- run ----------------------------------------------------------------
     def run(self, progress: Optional[ProgressCB] = None, log: Optional[LogCB] = None) -> str:
         t0 = time.time()
+        codec = self.settings.encode.codec
+        if not codec_usable(self.ff, codec):  # fail now rather than after subtitles and loudness
+            raise FFmpegError(f"이 FFmpeg에서는 '{CODECS[codec].label}' 인코더를 쓸 수 없습니다. "
+                              "다른 코덱을 고르거나 최신 FFmpeg 'full' 빌드를 사용하세요.")
         if self.plan is None:
             self.analyze(progress, log)
         plan = self.plan
@@ -468,6 +479,7 @@ class Job:
         duration = self.sample[1] if self.sample else (plan.info.duration or 0.0)
         stats = {}
         started = time.time()
+        t = 0.0
         for raw in iter(proc.stdout.readline, b""):
             line = raw.decode("utf-8", "replace").strip()
             if "=" not in line:
@@ -475,9 +487,8 @@ class Job:
             k, _, val = line.partition("=")
             stats[k] = val
             if k == "progress":
-                t = 0.0
-                try:
-                    t = int(stats.get("out_time_us", "0")) / 1e6
+                try:  # out_time is "N/A" or briefly goes back while encoders flush
+                    t = max(t, int(stats.get("out_time_us", "")) / 1e6)
                 except ValueError:
                     pass
                 frac = min(1.0, t / duration) if duration > 0 else 0.0

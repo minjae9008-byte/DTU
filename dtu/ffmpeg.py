@@ -9,7 +9,7 @@ import subprocess
 import sys
 import threading
 from functools import lru_cache
-from typing import Dict, Iterable, List, Optional, Sequence, Set
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 IS_WINDOWS = os.name == "nt"
 # Hide console windows of child processes when running the GUI on Windows.
@@ -148,12 +148,13 @@ class FFmpeg:
         return any(name in d.split(",") for d in self.demuxers())
 
     @lru_cache(maxsize=64)
-    def encoder_works(self, name: str, pix_fmt: str = "yuv420p") -> bool:
-        """Try a tiny encode: listed hardware encoders often lack a device."""
+    def encoder_works(self, name: str, pix_fmt: str = "yuv420p", options: Tuple[str, ...] = ()) -> bool:
+        """Try a tiny encode: listed hardware encoders often lack a device, and
+        older library builds may reject ``options``."""
         if not self.has_encoder(name):
             return False
         args = [self.ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-f", "lavfi",
-                "-i", "testsrc2=s=256x144:r=24:d=0.25", "-pix_fmt", pix_fmt, "-c:v", name,
+                "-i", "testsrc2=s=256x144:r=24:d=0.25", "-pix_fmt", pix_fmt, "-c:v", name, *options,
                 "-frames:v", "3", "-f", "null", "-"]
         try:
             p = run(args, timeout=60)
