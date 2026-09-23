@@ -31,8 +31,9 @@ CODECS: Dict[str, CodecDef] = {c.key: c for c in [
     CodecDef("hevc", "HEVC/H.265 (x265) - 호환성 좋음", "libx265", "hevc", False, 20, (12, 32), "CRF"),
     CodecDef("h264", "H.264 (x264) - 최대 호환성", "libx264", "h264", False, 18, (12, 30), "CRF",
              ten_bit=False, note="구형 TV/기기 재생용 (8비트)"),
-    CodecDef("vvc", "VVC/H.266 (VVenC) - 차세대, 실험적", "libvvenc", "vvc", False, 30, (18, 45), "QP",
-             eight_bit=False, note="압축률은 가장 높지만 재생 가능한 플레이어가 적고 매우 느림"),
+    CodecDef("vvc", "VVC/H.266 (VVenC) - 차세대, 실험적", "libvvenc", "vvc", False, 22, (18, 45), "QP",
+             eight_bit=False, note="측정: 같은 화질에서 AV1보다 약 35~40% 작지만 인코딩이 15~20배 느리고 "
+                                   "재생 가능한 플레이어가 적음"),
     CodecDef("av1_nvenc", "AV1 (NVIDIA NVENC, RTX 40 이상)", "av1_nvenc", "av1", True, 30, (15, 45), "CQ"),
     CodecDef("hevc_nvenc", "HEVC (NVIDIA NVENC)", "hevc_nvenc", "hevc", True, 24, (15, 38), "CQ"),
     CodecDef("h264_nvenc", "H.264 (NVIDIA NVENC)", "h264_nvenc", "h264", True, 21, (15, 35), "CQ",
