@@ -816,39 +816,42 @@ class App:
 
     def _run_worker(self, todo: List[JobItem], s: Settings, sample=None):
         from .job import Cancelled, Job
-        for item in todo:
-            if self.stop_all:
-                break
-            job = Job(item.path, s.copy(), ff=self.ff, sample=sample)
-            job._item = item
-            self.current = job
-            self.q.put(("status", item, "변환 중", ""))
+        try:
+            for item in todo:
+                if self.stop_all:
+                    break
+                job = Job(item.path, s.copy(), ff=self.ff, sample=sample)
+                job._item = item
+                self.current = job
+                self.q.put(("status", item, "변환 중", ""))
 
-            def progress(stage, frac, detail, _item=item):
-                self.q.put(("progress", _item, stage, frac, detail))
+                def progress(stage, frac, detail, _item=item):
+                    self.q.put(("progress", _item, stage, frac, detail))
 
-            def log(msg):
-                self.q.put(("log", msg))
-            try:
-                job.analyze(progress, log, scan=item.scan, crop=item.crop)
-                out = job.run(progress, log)
-                if sample is None:
-                    item.done = True
-                item.output = out
-                self.q.put(("status", item, "시험 변환 완료" if sample else "완료", "100%"))
-                if sample:
-                    size = os.path.getsize(out) / 1e6
-                    est = size / sample[1] * (item.duration or sample[1]) / 1000
-                    self.q.put(("log", f"시험 변환 결과: {out} ({size:.1f} MB / 30초 → 전체 예상 약 {est:.1f} GB)"))
-            except Cancelled:
-                self.q.put(("status", item, "중지됨", ""))
-                break
-            except Exception as e:  # noqa: BLE001
-                self.q.put(("log", "오류: " + str(e)))
-                self.q.put(("log", traceback.format_exc()))
-                self.q.put(("status", item, "실패", ""))
-        self.current = None
-        self.q.put(("finished",))
+                def log(msg):
+                    self.q.put(("log", msg))
+                try:
+                    job.analyze(progress, log, scan=item.scan, crop=item.crop)
+                    out = job.run(progress, log)
+                    if sample is None:
+                        item.done = True
+                    item.output = out
+                    self.q.put(("status", item, "시험 변환 완료" if sample else "완료", "100%"))
+                    if sample:
+                        size = os.path.getsize(out) / 1e6
+                        est = size / sample[1] * (item.duration or sample[1]) / 1000
+                        self.q.put(("log", f"시험 변환 결과: {out} ({size:.1f} MB / {sample[1]:.0f}초 → "
+                                           f"전체 예상 약 {est:.1f} GB)"))
+                except (Cancelled, KeyboardInterrupt):
+                    self.q.put(("status", item, "중지됨", ""))
+                    break
+                except Exception as e:  # noqa: BLE001
+                    self.q.put(("log", "오류: " + str(e)))
+                    self.q.put(("log", traceback.format_exc()))
+                    self.q.put(("status", item, "실패", ""))
+        finally:
+            self.current = None
+            self.q.put(("finished",))
 
     # -- queue polling ------------------------------------------------------
     def _poll(self):

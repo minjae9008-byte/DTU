@@ -27,7 +27,7 @@ class CodecDef:
 
 CODECS: Dict[str, CodecDef] = {c.key: c for c in [
     CodecDef("av1", "AV1 (SVT-AV1) - 최신·최고 압축, 추천", "libsvtav1", "av1", False, 27, (10, 50), "CRF",
-             note="같은 화질에서 H.264 대비 약 50%, HEVC 대비 약 20~30% 작은 파일"),
+             note="측정: 같은 화질(VMAF≈98.5)에서 H.264보다 약 40%, HEVC보다 약 13% 작은 파일"),
     CodecDef("hevc", "HEVC/H.265 (x265) - 호환성 좋음", "libx265", "hevc", False, 20, (12, 32), "CRF"),
     CodecDef("h264", "H.264 (x264) - 최대 호환성", "libx264", "h264", False, 18, (12, 30), "CRF",
              ten_bit=False, note="구형 TV/기기 재생용 (8비트)"),

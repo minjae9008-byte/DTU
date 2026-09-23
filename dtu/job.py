@@ -80,7 +80,8 @@ class JobPlan:
 
 def default_output_path(spec: InputSpec, s: Settings, sample: bool = False) -> str:
     ext = "mp4" if s.encode.container == "mp4" else "mkv"
-    base_dir = s.output_dir or (spec.display if os.path.isdir(spec.display) else os.path.dirname(spec.display))
+    # a DVD folder is written next to the folder, not into it
+    base_dir = s.output_dir or os.path.dirname(os.path.abspath(spec.display.rstrip("/\\")))
     suffix = s.name_suffix + ("_sample" if sample else "")
     out = os.path.join(base_dir, f"{spec.stem}{suffix}.{ext}")
     k = 2
@@ -385,14 +386,20 @@ class Job:
         self.temp_dir = tempfile.mkdtemp(prefix="dtu_", dir=out_dir if s.keep_temp else None)
         try:
             self._check()
-            self._prepare_subtitles(progress, log)
+            try:
+                self._prepare_subtitles(progress, log)
+            except KeyboardInterrupt:  # raised by the subtitle workers on cancel
+                raise Cancelled()
             self._check()
             if any(a.normalize for a in plan.audio):
                 if progress:
                     progress("loudness", 0.0, "음량 측정 중 (EBU R128)")
-                measure_loudness(self.ff, plan.info, plan.audio, input_args=self.input_args(),
-                                 progress=(lambda f: progress("loudness", f, "음량 측정 중 (EBU R128)"))
-                                 if progress else None, cancel=self._cancel.is_set)
+                try:
+                    measure_loudness(self.ff, plan.info, plan.audio, input_args=self.input_args(),
+                                     progress=(lambda f: progress("loudness", f, "음량 측정 중 (EBU R128)"))
+                                     if progress else None, cancel=self._cancel.is_set)
+                except KeyboardInterrupt:
+                    raise Cancelled()
                 if log:
                     for a in plan.audio:
                         if a.normalize:

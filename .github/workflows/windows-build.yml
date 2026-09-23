@@ -1,0 +1,43 @@
+# Builds a self-contained Windows package (DTU.exe + FFmpeg) on demand.
+# Run it from the "Actions" tab (workflow_dispatch) or by pushing a v* tag.
+name: Windows package
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build dependencies
+        run: python -m pip install numpy pyinstaller tkinterdnd2
+      - name: Download FFmpeg (BtbN GPL build)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_dl
+          New-Item -ItemType Directory -Force -Path ffmpeg/bin | Out-Null
+          Get-ChildItem ffmpeg_dl -Recurse -Include ffmpeg.exe,ffprobe.exe | Copy-Item -Destination ffmpeg/bin
+          Get-ChildItem ffmpeg_dl -Recurse -Include LICENSE.txt | Select-Object -First 1 | Copy-Item -Destination ffmpeg/FFMPEG_LICENSE.txt
+      - name: Build
+        run: pyinstaller --noconfirm --windowed --name DTU --collect-all tkinterdnd2 --add-data "ffmpeg;ffmpeg" dtu_launcher.py
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          python -m pip install pytest
+          python -m pytest -q tests/test_subtitles.py tests/test_planning.py
+      - name: Package
+        shell: pwsh
+        run: |
+          Copy-Item README.md dist/DTU/
+          Compress-Archive -Path dist/DTU/* -DestinationPath DTU-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DTU-windows-x64
+          path: DTU-windows-x64.zip
