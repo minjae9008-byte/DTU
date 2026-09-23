@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from . import __version__
 from .analyze import CropAnalysis, ScanAnalysis, analyze_crop, analyze_scan
@@ -78,14 +78,15 @@ class JobPlan:
         return "\n".join(lines)
 
 
-def default_output_path(spec: InputSpec, s: Settings) -> str:
+def default_output_path(spec: InputSpec, s: Settings, sample: bool = False) -> str:
     ext = "mp4" if s.encode.container == "mp4" else "mkv"
     base_dir = s.output_dir or (spec.display if os.path.isdir(spec.display) else os.path.dirname(spec.display))
-    name = f"{spec.stem}{s.name_suffix}.{ext}"
-    out = os.path.join(base_dir, name)
+    suffix = s.name_suffix + ("_sample" if sample else "")
+    out = os.path.join(base_dir, f"{spec.stem}{suffix}.{ext}")
     k = 2
-    while os.path.abspath(out) in [os.path.abspath(p) for p in spec.paths] or os.path.exists(out):
-        out = os.path.join(base_dir, f"{spec.stem}{s.name_suffix}_{k}.{ext}")
+    while os.path.abspath(out) in [os.path.abspath(p) for p in spec.paths] or \
+            (os.path.exists(out) and not sample):
+        out = os.path.join(base_dir, f"{spec.stem}{suffix}_{k}.{ext}")
         k += 1
     return out
 
@@ -101,10 +102,28 @@ def select_subs(info: MediaInfo, s: Settings) -> List[SubtitleStream]:
     return subs
 
 
+def _window_track(track, start: float, dur: float):
+    """Copy of a subtitle track limited to [start, start+dur) and shifted to 0."""
+    import copy
+    t2 = copy.copy(track)
+    pics = []
+    for p in track.pictures:
+        if p.end <= start or p.start >= start + dur:
+            continue
+        q = copy.copy(p)
+        q.start = max(0.0, p.start - start)
+        q.end = min(dur, p.end - start)
+        pics.append(q)
+    t2.pictures = pics
+    return t2
+
+
 class Job:
     def __init__(self, source, settings: Settings, output: Optional[str] = None,
-                 ff: Optional[FFmpeg] = None):
+                 ff: Optional[FFmpeg] = None, sample: Optional[Tuple[float, float]] = None):
+        """``sample=(start, seconds)`` converts only that window (test encode)."""
         self.settings = settings
+        self.sample = sample
         self.ff = ff or FFmpeg(folder=settings.ffmpeg_dir or None)
         if isinstance(source, InputSpec):
             self.spec = source
@@ -116,6 +135,14 @@ class Job:
         self._cancel = threading.Event()
         self.temp_dir: Optional[str] = None
         self.last_command: List[str] = []
+
+    def input_args(self) -> List[str]:
+        """Main input arguments, with seek/limit for sample encodes."""
+        a = self.spec.args()
+        if self.sample is not None:
+            start, dur = self.sample
+            a = a[:-2] + ["-ss", f"{start:.3f}", "-t", f"{dur:.3f}"] + a[-2:]
+        return a
 
     # -- control ------------------------------------------------------------
     def cancel(self) -> None:
@@ -179,7 +206,12 @@ class Job:
                         subs.append(SubPlan(stream=x, action="copy", default=x.default))
                     elif x.is_text and not x.external:
                         subs.append(SubPlan(stream=x, action="copy", default=x.default))
-        out = self.output or default_output_path(self.spec, s)
+        out = self.output or default_output_path(self.spec, s, sample=self.sample is not None)
+        if self.sample is not None:
+            start, dur = self.sample
+            if start < 0 or (info.duration and start >= info.duration):
+                start = max(0.0, (info.duration or 0) / 3)
+            self.sample = (start, max(1.0, min(dur, (info.duration or start + dur) - start)))
         self.plan = JobPlan(info=info, settings=s, scan=scan, crop=crop, video=vplan, audio=aplans,
                             subs=subs, output=out)
         return self.plan
@@ -226,6 +258,8 @@ class Job:
                     progress("subtitles", (_n + i / max(1, total)) / max(1, len(todo)),
                              f"자막 #{st.index} 업스케일 {i}/{total}")
 
+            if self.sample is not None:
+                track = _window_track(track, *self.sample)
             sp.events = convert_track(track, geom, sp.sup_path, self.settings.subtitles.algorithm,
                                       forced_only=sp.forced_only, workers=self.settings.workers,
                                       progress=prog, cancel=self._cancel.is_set)
@@ -238,6 +272,7 @@ class Job:
 
     # -- command ------------------------------------------------------------
     def build_command(self) -> List[str]:
+        """The single FFmpeg command that filters, encodes and muxes everything."""
         plan = self.plan
         assert plan is not None
         s = self.settings
@@ -246,10 +281,11 @@ class Job:
         ff = self.ff
         container = "mp4" if s.encode.container == "mp4" else "mkv"
         # no -nostdin: cancel() sends "q" on stdin for a clean stop
-        args: List[str] = [ff.ffmpeg, "-hide_banner", "-y"]
+        args: List[str] = [ff.ffmpeg, "-hide_banner", "-y", "-progress", "pipe:1", "-nostats",
+                           "-stats_period", "1"]
         if vp.uses_vulkan:
             args += ["-init_hw_device", "vulkan=vk", "-filter_hw_device", "vk"]
-        args += info.spec.args()
+        args += self.input_args()
         extra_inputs: List[SubPlan] = []
         for sp in plan.subs:
             if sp.action in ("pgs", "burn") and sp.sup_path and sp.events > 0:
@@ -267,36 +303,41 @@ class Job:
             graph += (f"[vmain];[{k}:0]scale=out_color_matrix={mtx}:out_range=tv,format={spix}[vsub];"
                       f"[vmain][vsub]overlay=eof_action=pass:format={ofmt},format={pix}")
         graph += "[vout]"
-        args += ["-filter_complex", graph, "-map", "[vout]", "-disposition:v:0", "default"]
-        args += encoder_args(s.encode, vp.out_fps)
-        if container == "mp4" and CODECS[s.encode.codec].family == "hevc" and "-tag:v" not in args:
-            args += ["-tag:v", "hvc1"]
-        if container == "mkv":
-            # hvc1 tags are only meaningful in MP4
-            while "-tag:v" in args:
-                i = args.index("-tag:v")
-                del args[i:i + 2]
-        # colour metadata of the output
+        args += ["-filter_complex", graph]
+
+        # ---- video
+        vargs = ["-map", "[vout]", "-disposition:v:0", "default"]
+        venc = encoder_args(s.encode, vp.out_fps)
+        while "-tag:v" in venc:  # added back below for MP4 only
+            i = venc.index("-tag:v")
+            del venc[i:i + 2]
+        vargs += venc
+        if container == "mp4" and CODECS[s.encode.codec].family == "hevc":
+            vargs += ["-tag:v", "hvc1"]
         if vp.upscaled and s.video.color_convert and v.is_sd and vp.out_h > 576:
-            args += ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"]
+            vargs += ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"]
         else:
             m, p, t, _ = v.source_colors()
-            args += ["-color_primaries", p, "-color_trc", t, "-colorspace", m]
-        args += ["-color_range", "tv"]
-        # audio
+            vargs += ["-color_primaries", p, "-color_trc", t, "-colorspace", m]
+        vargs += ["-color_range", "tv"]
+
+        # ---- audio
+        aargs: List[str] = []
         for n, ap in enumerate(plan.audio):
-            args += ["-map", f"0:{ap.stream.index}"]
+            aargs += ["-map", f"0:{ap.stream.index}"]
             flt = ap.full_filters() if ap.action == "encode" else []
             if flt:
-                args += [f"-filter:a:{n}", ",".join(flt)]
-            args += ap.codec_args(n)
+                aargs += [f"-filter:a:{n}", ",".join(flt)]
+            aargs += ap.codec_args(n)
             lang = ap.stream.language
             if lang:
-                args += [f"-metadata:s:a:{n}", f"language={lang}"]
+                aargs += [f"-metadata:s:a:{n}", f"language={lang}"]
             if ap.title:
-                args += [f"-metadata:s:a:{n}", f"title={ap.title}"]
-            args += [f"-disposition:a:{n}", "default" if ap.default else "0"]
-        # subtitles
+                aargs += [f"-metadata:s:a:{n}", f"title={ap.title}"]
+            aargs += [f"-disposition:a:{n}", "default" if ap.default else "0"]
+
+        # ---- subtitles
+        sargs: List[str] = []
         sn = 0
         for sp in plan.subs:
             if sp.action == "pgs":
@@ -305,28 +346,28 @@ class Job:
                 if container == "mp4":
                     continue  # PGS is not allowed in MP4: written next to the output instead
                 k = extra_inputs.index(sp) + 1
-                args += ["-map", f"{k}:0", f"-c:s:{sn}", "copy"]
+                sargs += ["-map", f"{k}:0", f"-c:s:{sn}", "copy"]
             elif sp.action == "copy":
                 if container == "mp4" and sp.stream.is_bitmap:
                     continue
-                args += ["-map", f"0:{sp.stream.index}",
-                         f"-c:s:{sn}", "mov_text" if container == "mp4" else "copy"]
+                sargs += ["-map", f"0:{sp.stream.index}",
+                          f"-c:s:{sn}", "mov_text" if container == "mp4" else "copy"]
             else:
                 continue
             lang = sp.stream.language
             if lang:
-                args += [f"-metadata:s:s:{sn}", f"language={lang}"]
+                sargs += [f"-metadata:s:s:{sn}", f"language={lang}"]
             if sp.title:
-                args += [f"-metadata:s:s:{sn}", f"title={sp.title}"]
+                sargs += [f"-metadata:s:s:{sn}", f"title={sp.title}"]
             disp = "forced" if sp.forced_only else ("default" if sp.default else "0")
-            args += [f"-disposition:s:{sn}", disp]
+            sargs += [f"-disposition:s:{sn}", disp]
             sn += 1
-        args += ["-map_chapters", "0", "-map_metadata", "0",
-                 "-metadata", f"encoding_tool=DTU {__version__} (FFmpeg)",
-                 "-max_muxing_queue_size", "4096"]
+        common = ["-map_chapters", "0", "-map_metadata", "0",
+                  "-metadata", f"encoding_tool=DTU {__version__} (FFmpeg)", "-max_muxing_queue_size", "4096"]
+        args += vargs + aargs + sargs + common
         if container == "mp4":
             args += ["-movflags", "+faststart"]
-        args += ["-progress", "pipe:1", "-nostats", "-stats_period", "1", plan.output]
+        args += [plan.output]
         return args
 
     # -- run ----------------------------------------------------------------
@@ -349,7 +390,7 @@ class Job:
             if any(a.normalize for a in plan.audio):
                 if progress:
                     progress("loudness", 0.0, "음량 측정 중 (EBU R128)")
-                measure_loudness(self.ff, plan.info, plan.audio,
+                measure_loudness(self.ff, plan.info, plan.audio, input_args=self.input_args(),
                                  progress=(lambda f: progress("loudness", f, "음량 측정 중 (EBU R128)"))
                                  if progress else None, cancel=self._cancel.is_set)
                 if log:
@@ -365,7 +406,18 @@ class Job:
             self.last_command = cmd
             if log:
                 log("FFmpeg 명령:\n" + args_to_display(cmd))
-            self._encode(cmd, plan, progress, log)
+            try:
+                self._encode(cmd, plan, progress, log)
+            except BaseException:
+                # never leave a half-written file that looks like a finished movie
+                try:
+                    if os.path.exists(plan.output):
+                        os.remove(plan.output)
+                        if log:
+                            log(f"미완성 출력 파일 삭제: {plan.output}")
+                except OSError:
+                    pass
+                raise
             if s.encode.container == "mp4":
                 self._export_sidecar_subs(plan, log)
             if log:
@@ -406,7 +458,7 @@ class Job:
 
         th = threading.Thread(target=drain, daemon=True)
         th.start()
-        duration = plan.info.duration or 0.0
+        duration = self.sample[1] if self.sample else (plan.info.duration or 0.0)
         stats = {}
         started = time.time()
         for raw in iter(proc.stdout.readline, b""):

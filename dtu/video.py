@@ -24,8 +24,8 @@ TARGET_BOXES = {"720p": (1280, 720), "1080p": (1920, 1080), "1440p": (2560, 1440
 # zimg names for colour properties reported by ffprobe
 _Z_MATRIX = {"smpte170m": "170m", "bt470bg": "470bg", "bt709": "709", "bt2020nc": "2020_ncl",
              "fcc": "fcc", "smpte240m": "240m"}
-_Z_PRIM = {"smpte170m": "170m", "bt470bg": "470bg", "bt709": "709", "bt2020": "2020", "smpte240m": "240m",
-           "bt470m": "470m"}
+_Z_PRIM = {"smpte170m": "170m", "bt470bg": "bt470bg", "bt709": "709", "bt2020": "2020", "smpte240m": "240m",
+           "bt470m": "bt470m"}  # zscale spells EBU/470M primaries with the "bt" prefix
 _Z_TRC = {"smpte170m": "601", "bt470bg": "601", "bt470m": "601", "bt709": "709", "bt2020-10": "2020_10",
           "smpte240m": "240m", "gamma22": "601", "gamma28": "601"}
 

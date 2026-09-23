@@ -158,7 +158,11 @@ def cmd_encode(ns) -> int:
             f.write(s.to_json())
     rc = 0
     for src in ns.inputs:
-        job = Job(src, s, output=ns.output if len(ns.inputs) == 1 else None)
+        sample = None
+        if ns.sample:
+            parts = [float(x) for x in ns.sample.split(",")] if "," in ns.sample else [-1.0, float(ns.sample)]
+            sample = (parts[0], parts[1])
+        job = Job(src, s, output=ns.output if len(ns.inputs) == 1 else None, sample=sample)
         try:
             plan = job.analyze(_progress_printer(), _log)
             if ns.dry_run:
@@ -258,6 +262,7 @@ def make_parser() -> argparse.ArgumentParser:
     pe.add_argument("inputs", nargs="+")
     pe.add_argument("-o", "--output")
     pe.add_argument("--dry-run", action="store_true", help="명령만 출력")
+    pe.add_argument("--sample", help="시험 변환: 'SECONDS' (영상 1/3 지점부터) 또는 'START,SECONDS'")
     add_options(pe)
 
     pp = sub.add_parser("preview", help="처리 전/후 비교 이미지")

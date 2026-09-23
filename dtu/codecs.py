@@ -99,7 +99,9 @@ def encoder_args(es: EncodeSettings, fps: Optional[Fraction] = None) -> List[str
         else:
             a += ["-g", str(gop)]
     elif enc == "libvvenc":
-        a += ["-preset", _VVENC_PRESET[speed], "-qp", str(q), "-period", "10"]
+        # intra period 5 s (VVenC emits no frames for clips shorter than a
+        # longer period in current FFmpeg builds)
+        a += ["-preset", _VVENC_PRESET[speed], "-qp", str(q), "-period", "5"]
     elif enc.endswith("_nvenc"):
         a += ["-preset", _NVENC_PRESET[speed], "-tune", "hq", "-rc", "vbr", "-cq", str(q), "-b:v", "0",
               "-spatial-aq", "1", "-temporal-aq", "1", "-rc-lookahead", "32", "-g", str(gop)]

@@ -219,7 +219,8 @@ def plan_audio(info: MediaInfo, s: AudioSettings, container: str = "mkv") -> Lis
 
 def measure_loudness(ff: FFmpeg, info: MediaInfo, plans: Sequence[AudioTrackPlan],
                      progress: Optional[Callable[[float], None]] = None,
-                     cancel: Optional[Callable[[], bool]] = None) -> None:
+                     cancel: Optional[Callable[[], bool]] = None,
+                     input_args: Optional[Sequence[str]] = None) -> None:
     """First pass: integrated loudness of every track that will be normalised."""
     todo = [p for p in plans if p.normalize and p.action == "encode"]
     if not todo:
@@ -231,7 +232,7 @@ def measure_loudness(ff: FFmpeg, info: MediaInfo, plans: Sequence[AudioTrackPlan
         parts.append(f"[0:{p.stream.index}]{chain}[m{k}]")
         maps += ["-map", f"[m{k}]"]
     args = [ff.ffmpeg, "-hide_banner", "-nostdin", "-v", "info", "-nostats", "-progress", "pipe:1",
-            *info.spec.args(), "-vn", "-sn", "-dn", "-filter_complex", ";".join(parts), *maps, "-f", "null", "-"]
+            *(input_args or info.spec.args()), "-vn", "-sn", "-dn", "-filter_complex", ";".join(parts), *maps, "-f", "null", "-"]
     import subprocess
     proc = popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     err_chunks: List[bytes] = []

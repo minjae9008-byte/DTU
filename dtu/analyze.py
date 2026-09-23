@@ -21,6 +21,12 @@ from typing import Callable, List, Optional, Tuple
 from .ffmpeg import FFmpeg, run
 from .probe import MediaInfo
 
+# idet's default interlace threshold (ratio 1.04) mistakes the per-field coding
+# noise of grainy field-DCT MPEG-2 for combing; 1.5/2.0 keeps real motion
+# combing detected while noise is ignored (calibrated on grainy telecined,
+# clean telecined, true interlaced PAL/NTSC and progressive test clips).
+IDET = "idet=intl_thres=1.5:prog_thres=2.0"
+
 _IDET_MULTI = re.compile(r"Multi frame detection:\s*TFF:\s*(\d+)\s*BFF:\s*(\d+)\s*Progressive:\s*(\d+)\s*Undetermined:\s*(\d+)")
 _IDET_REP = re.compile(r"Repeated Fields:\s*Neither:\s*(\d+)\s*Top:\s*(\d+)\s*Bottom:\s*(\d+)")
 _CROP = re.compile(r"crop=(-?\d+):(-?\d+):(-?\d+):(-?\d+)")
@@ -116,7 +122,7 @@ def analyze_scan(ff: FFmpeg, info: MediaInfo, samples: int = 4, frames: int = 30
     for i, t in enumerate(times):
         if progress:
             progress(f"인터레이스 분석 {i + 1}/{len(times)}")
-        text = _run_filter(ff, info, t, frames, "idet", v.index)
+        text = _run_filter(ff, info, t, frames, IDET, v.index)
         m = _last(_IDET_MULTI, text)
         r = _last(_IDET_REP, text)
         if m:
@@ -153,17 +159,17 @@ def analyze_scan(ff: FFmpeg, info: MediaInfo, samples: int = 4, frames: int = 30
     for i, t in enumerate(times):
         if progress:
             progress(f"필드 매칭 분석 {i + 1}/{len(times)}")
-        text = _run_filter(ff, info, t, frames, "fieldmatch=order=auto:combmatch=none,idet", v.index)
+        text = _run_filter(ff, info, t, frames, "fieldmatch=order=auto:combmatch=full," + IDET, v.index)
         m = _last(_IDET_MULTI, text)
         if m:
             tff2 += m[0]; bff2 += m[1]; prog2 += m[2]
     d2 = tff2 + bff2 + prog2
     res.matched_interlaced_ratio = (tff2 + bff2) / d2 if d2 else 1.0
     if res.matched_interlaced_ratio < 0.10:
-        if ntsc and (res.repeated_ratio > 0.10 or res.soft_pulldown_ratio > 0.2):
-            res.scan = "telecine"
-        else:
-            res.scan = "field_shift"
+        # NTSC material that field matching turns progressive is 3:2 telecined
+        # film in practice (grain can hide the repeated fields from idet);
+        # PAL material is a 2:2 field-shifted progressive film transfer.
+        res.scan = "telecine" if ntsc else "field_shift"
     elif res.matched_interlaced_ratio < 0.5 and ntsc and res.repeated_ratio > 0.08:
         res.scan = "mixed"
     else:

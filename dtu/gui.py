@@ -272,6 +272,8 @@ class App:
         self.stop_btn.pack(side="right")
         self.start_btn = ttk.Button(of, text="▶ 변환 시작", style="Accent.TButton", command=self.start)
         self.start_btn.pack(side="right", padx=6)
+        self.sample_btn = ttk.Button(of, text="30초 시험 변환", command=self.start_sample)
+        self.sample_btn.pack(side="right")
 
         pr = ttk.Frame(bottom)
         pr.pack(fill="x", pady=(6, 2))
@@ -788,18 +790,36 @@ class App:
         self.stop_btn.configure(state="normal")
         threading.Thread(target=self._run_worker, args=(todo, s), daemon=True).start()
 
+    def start_sample(self):
+        """Convert 30 s from the middle of the selected file to check quality and size."""
+        if self.running:
+            return
+        item = self._selected_job()
+        if item is None or item.analyzing:
+            messagebox.showinfo("알림", "분석이 끝난 파일을 목록에서 선택하세요.")
+            return
+        if self.ff is None:
+            return
+        s = self.collect_settings()
+        self.running = True
+        self.stop_all = False
+        self.start_btn.configure(state="disabled")
+        self.sample_btn.configure(state="disabled")
+        self.stop_btn.configure(state="normal")
+        threading.Thread(target=self._run_worker, args=([item], s, (-1.0, 30.0)), daemon=True).start()
+
     def stop(self):
         self.stop_all = True
         if self.current is not None:
             self.current.cancel()
         self.status.set("중지하는 중…")
 
-    def _run_worker(self, todo: List[JobItem], s: Settings):
+    def _run_worker(self, todo: List[JobItem], s: Settings, sample=None):
         from .job import Cancelled, Job
         for item in todo:
             if self.stop_all:
                 break
-            job = Job(item.path, s.copy(), ff=self.ff)
+            job = Job(item.path, s.copy(), ff=self.ff, sample=sample)
             job._item = item
             self.current = job
             self.q.put(("status", item, "변환 중", ""))
@@ -812,9 +832,14 @@ class App:
             try:
                 job.analyze(progress, log, scan=item.scan, crop=item.crop)
                 out = job.run(progress, log)
-                item.done = True
+                if sample is None:
+                    item.done = True
                 item.output = out
-                self.q.put(("status", item, "완료", "100%"))
+                self.q.put(("status", item, "시험 변환 완료" if sample else "완료", "100%"))
+                if sample:
+                    size = os.path.getsize(out) / 1e6
+                    est = size / sample[1] * (item.duration or sample[1]) / 1000
+                    self.q.put(("log", f"시험 변환 결과: {out} ({size:.1f} MB / 30초 → 전체 예상 약 {est:.1f} GB)"))
             except Cancelled:
                 self.q.put(("status", item, "중지됨", ""))
                 break
@@ -878,6 +903,7 @@ class App:
         elif kind == "finished":
             self.running = False
             self.start_btn.configure(state="normal")
+            self.sample_btn.configure(state="normal")
             self.stop_btn.configure(state="disabled")
             done = [j for j in self.jobs if j.done]
             self.status.set(f"작업 종료 - 완료 {len(done)}개")
